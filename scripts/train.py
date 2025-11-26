@@ -12,10 +12,17 @@ from torch.utils.tensorboard import SummaryWriter
 import wandb
 from tqdm import tqdm
 from omegaconf import OmegaConf
+import gc
 
 def set_seed(seed):
     torch.manual_seed(seed)
     np.random.seed(seed)
+
+def cleanup_memory():
+    """Force garbage collection and CUDA cache clear"""
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 @hydra.main(config_path="../configs", config_name="configs", version_base="1.3")
 def main(cfg: DictConfig):
@@ -92,7 +99,8 @@ def main(cfg: DictConfig):
             project=cfg.logging.project,
             entity=cfg.logging.entity,
             config=OmegaConf.to_container(cfg, resolve=True),
-            name= hydra.core.hydra_config.HydraConfig.get().job.name
+            name= hydra.core.hydra_config.HydraConfig.get().job.name,
+            settings=wandb.Settings(verbosity=wandb.Verbosity.ERROR)
         )
         wandb.watch((csd_net, conc_net), log="all", log_freq=cfg.logging.log_freq)
 
@@ -114,6 +122,7 @@ def main(cfg: DictConfig):
 
             optimizer.zero_grad()
             loss_phys, loss_dict, preds = phys.compute_loss(csd_net, conc_net, t_b, L_b, T_b, F_b, N_b)
+            loss_value = loss_phys.item()
             loss_phys.backward()
 
             # Gradient clipping
@@ -122,13 +131,16 @@ def main(cfg: DictConfig):
             optimizer.step()
 
             # Accumulate
-            epoch_loss += loss_phys.item()
+            epoch_loss += loss_value
             num_batches += 1
             global_step += 1
+            
+            # Clean up batch and loss to free memory
+            del t_b, L_b, T_b, F_b, N_b, loss_phys, preds
 
             # --- Logging (W&B + TensorBoard) ---
             log_dict = {
-                "Loss/total": loss_phys.item(),
+                "Loss/total": loss_value,
                 "Loss_Physics/PDE_cryst": loss_dict["pde_cryst_loss"],
                 "Loss_Physics/PDE_wm": loss_dict["pde_wm_loss"],
                 "Loss_Physics/Mass_cryst": loss_dict["mass_cryst_loss"],
@@ -166,11 +178,18 @@ def main(cfg: DictConfig):
                     "epoch": epoch
                 })
 
-            pbar.set_postfix({"loss": f"{loss_phys.item():.3e}"})
+            pbar.set_postfix({"loss": f"{loss_value:.3e}"})
+            
+            # Periodic memory cleanup (every 10 batches)
+            if num_batches % 20 == 0:
+                cleanup_memory()
 
         # End of epoch
         avg_epoch_loss = epoch_loss / num_batches
         print(f"Epoch {epoch+1} | Avg Loss: {avg_epoch_loss:.3e}")
+        
+        # Cleanup memory at end of epoch
+        cleanup_memory()
 
         # Save checkpoint
         ckpt_path = f"pinn_pbm_checkpoint_epoch_{epoch}.pt"
