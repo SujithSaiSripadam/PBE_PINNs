@@ -1,0 +1,25 @@
+# Python bytecode
+*.pyc
+*.pyo
+__pycache__/
+.venv/
+data/
+outputs/
+env/
+venv/
+.ipynb_checkpoints/
+*.egg
+*.egg-info/
+dist/
+build/
+*.log
+*.pt
+runs/
+wandb/
+.DS_Store
+.vscode/
+.idea/
+.env
+config.py
+*.swp
+*.csv

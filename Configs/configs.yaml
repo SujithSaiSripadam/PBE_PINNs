@@ -1,0 +1,66 @@
+defaults:
+  - _self_
+
+# --- Model ---
+model:
+  hidden_dim: 256
+  num_layers: 4
+  activation: "SiLU"
+
+# --- Training ---
+training:
+  n_epochs: 100
+  lr: 5e-5
+  weight_decay: 1e-6
+  batch_size: 512
+  grad_clip: 5.0
+  seed: 42
+
+# --- Physics ---
+physics:
+  Vc: 1.0e-3
+  Vwm: 1.5e-4
+  kv: 0.32
+  rho_c: 1412.0
+  kb: 1.39e5
+  b: 2.62
+  kg: 0.337
+  g: 1.0
+  kd: 0.563
+  d: 1.0
+  Ln: 1.0e-6
+
+  # solubility coefficients
+  a0: 5.48e-3
+  a1: -1.93e-4
+  a2: 7.09e-6
+
+  # wet mill / breakage
+  rho_imp: 7850.0
+  h_imp: 2e-3
+  l_imp: 50e-3
+  d_imp: 60e-3
+  beta: 1.0
+  ka: 200.0
+  kf: 80.0
+
+  L_max: 1.2e-3          # 1200 μm
+  n_L_grid: 101          # must be odd
+  total_time: 1200.0     # seconds
+  n_t_collocation: 300
+  t_scale: 1200.0
+  L_scale: 1.2e-3
+  c_ref_temp: 30.0       # for c_scale
+  n_scale: 1e12
+
+# --- Data ---
+data:
+  csv_path: "data/data.csv"
+  nrows: null          # set to int to subsample
+
+# --- Logging ---
+logging:
+  use_wandb: true
+  project: "full_pbm_pinn"
+  entity: null
+  log_freq: 100
