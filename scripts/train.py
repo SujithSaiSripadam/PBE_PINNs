@@ -160,6 +160,7 @@ def main(cfg: DictConfig):
             # --- Optional: Log concentration slice vs true data ---
             # Pick a representative time near the middle of the batch
             # At end of epoch
+            """
             with torch.no_grad():
                 t_all_norm = data["t"] / cfg.physics.t_scale
                 c_pred_all, _ = conc_net(t_all_norm)
@@ -177,13 +178,13 @@ def main(cfg: DictConfig):
                     "validation/MAE": np.mean(np.abs(c_pred_all - c_true_all)),
                     "epoch": epoch
                 })
-
+            
             pbar.set_postfix({"loss": f"{loss_value:.3e}"})
             
             # Periodic memory cleanup (every 10 batches)
-            if num_batches % 20 == 0:
+            if num_batches % 1 == 0:
                 cleanup_memory()
-
+            """
         # End of epoch
         avg_epoch_loss = epoch_loss / num_batches
         print(f"Epoch {epoch+1} | Avg Loss: {avg_epoch_loss:.3e}")
