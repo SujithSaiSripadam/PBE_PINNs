@@ -137,12 +137,12 @@ class PhysicsLossFullPBM_Nondim:
 
         # --- Crystallizer PDE ---
         ones = torch.ones_like(n_c_hat)
-        dn_hat_dtau = torch.autograd.grad(n_c_hat, t_hat, grad_outputs=ones, create_graph=True, retain_graph=True)[0]
+        dn_hat_dtau = torch.autograd.grad(n_c_hat, t_hat, grad_outputs=ones, create_graph=True)[0]
         Gn_hat = G_hat * n_c_hat
-        dGnhat_dlambda = torch.autograd.grad(Gn_hat, L_hat, grad_outputs=ones, create_graph=True, retain_graph=True)[0]
+        dGnhat_dlambda = torch.autograd.grad(Gn_hat, L_hat, grad_outputs=ones, create_graph=True)[0]
         
         # Clean up intermediate (don't keep in graph)
-        del Gn_hat
+        #del Gn_hat
 
         pde_cryst_hat = (
             dn_hat_dtau
@@ -153,7 +153,7 @@ class PhysicsLossFullPBM_Nondim:
         pde_cryst_loss = torch.mean(pde_cryst_hat ** 2)
         
         # Delete gradient tensors to free memory
-        del dn_hat_dtau, dGnhat_dlambda, pde_cryst_hat, ones
+        #del dn_hat_dtau, dGnhat_dlambda, pde_cryst_hat, ones
 
         # --- Crystallizer Mass Balance ---
         t_vals_phys = t_coll_phys.detach()
@@ -202,7 +202,7 @@ class PhysicsLossFullPBM_Nondim:
         n_wm_matrix_phys = (n_wm_rep_hat * self.n_scale).view(n_unique, self.nL)
         
         # Clean up intermediate tensors to reduce memory
-        del t_rep, L_rep, t_rep_norm, L_rep_norm, n_wm_rep_hat
+        #del t_rep, L_rep, t_rep_norm, L_rep_norm, n_wm_rep_hat
 
         N_per_t = torch.zeros(n_unique, device=self.device, dtype=self.dtype)
         for k in range(n_unique):
@@ -219,7 +219,7 @@ class PhysicsLossFullPBM_Nondim:
         for k in range(n_unique):
             w_parent = n_wm_matrix_phys[k, :] * S_mat_dim[k, :]
             integrals_dim[k, :] = torch.matmul(w_parent, self.B_phys) * self.dL_phys
-            del w_parent  # Clean up loop intermediate
+            #del w_parent  # Clean up loop intermediate
 
         integrals_hat = integrals_dim * (self.t_scale / self.n_scale)
         integrals_coll_hat = integrals_hat[inv_idx, nearest_idx]
@@ -227,16 +227,16 @@ class PhysicsLossFullPBM_Nondim:
         recirc_wm_hat = Fhat_wm * (n_c_hat - n_wm_hat)
         
         # Clean up large matrices
-        del integrals_dim, S_mat_dim
+        #del integrals_dim, S_mat_dim
 
         dn_wm_hat_dtau = torch.autograd.grad(
-            n_wm_hat, t_hat, grad_outputs=torch.ones_like(n_wm_hat), create_graph=True, retain_graph=True
+            n_wm_hat, t_hat, grad_outputs=torch.ones_like(n_wm_hat), create_graph=True
         )[0]
         pde_wm_hat = dn_wm_hat_dtau - (integrals_coll_hat - S_coll_hat * n_wm_hat + recirc_wm_hat)
         pde_wm_loss = torch.mean(pde_wm_hat ** 2)
         
         # Clean up
-        del dn_wm_hat_dtau, pde_wm_hat, integrals_coll_hat, S_coll_hat, recirc_wm_hat
+        #del dn_wm_hat_dtau, pde_wm_hat, integrals_coll_hat, S_coll_hat, recirc_wm_hat
 
         # --- Wet Mill Mass Balance ---
         dc_wm_hat_dtau = torch.autograd.grad(
@@ -247,7 +247,7 @@ class PhysicsLossFullPBM_Nondim:
         mass_wm_loss = torch.mean(mass_wm_hat ** 2)
         
         # Clean up
-        del dc_wm_hat_dtau, mass_wm_hat, RHS_dim_wm
+        #del dc_wm_hat_dtau, mass_wm_hat, RHS_dim_wm
 
         # --- Boundary & Initial Conditions ---
         mask_Lmax = nearest_idx == (self.nL - 1)
