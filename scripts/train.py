@@ -100,7 +100,7 @@ def main(cfg: DictConfig):
             entity=cfg.logging.entity,
             config=OmegaConf.to_container(cfg, resolve=True),
             name= hydra.core.hydra_config.HydraConfig.get().job.name,
-            settings=wandb.Settings(verbosity=wandb.Verbosity.ERROR)
+            settings=wandb.Settings(show_warnings = False)
         )
         wandb.watch((csd_net, conc_net), log="all", log_freq=cfg.logging.log_freq)
 
@@ -136,7 +136,7 @@ def main(cfg: DictConfig):
             global_step += 1
             
             # Clean up batch and loss to free memory
-            del t_b, L_b, T_b, F_b, N_b, loss_phys, preds
+            #del t_b, L_b, T_b, F_b, N_b, loss_phys, preds
 
             # --- Logging (W&B + TensorBoard) ---
             log_dict = {
