@@ -3,16 +3,16 @@ defaults:
 
 # --- Model ---
 model:
-  hidden_dim: 256
-  num_layers: 4
+  hidden_dim: 512
+  num_layers: 5
   activation: "SiLU"
 
 # --- Training ---
 training:
-  n_epochs: 100
-  lr: 5e-5
+  n_epochs: 200
+  lr: 1e-5
   weight_decay: 1e-6
-  batch_size: 512
+  batch_size: 1024
   grad_clip: 5.0
   seed: 42
 
