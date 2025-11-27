@@ -52,6 +52,9 @@ physics:
   L_scale: 1.2e-3
   c_ref_temp: 30.0       # for c_scale
   n_scale: 1e12
+  T_scale: 40.0      # [°C] — max or reference temperature
+  F_scale: 1.0e-6    # [m³/s] — typical flow rate
+  N_scale: 50.0      # [RPS] — max impeller speed
 
 # --- Data ---
 data:

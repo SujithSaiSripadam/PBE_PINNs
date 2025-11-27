@@ -13,6 +13,7 @@ import wandb
 from tqdm import tqdm
 from omegaconf import OmegaConf
 import gc
+from scipy.interpolate import interp1d
 
 def set_seed(seed):
     torch.manual_seed(seed)
@@ -210,16 +211,40 @@ def main(cfg: DictConfig):
         csd_net.eval()
         conc_net.eval()
         with torch.no_grad():
-            eval_times = torch.linspace(0, cfg.physics.total_time, 5).to(device)
-            for t_eval in eval_times:
-                t_eval_norm = (t_eval / cfg.physics.t_scale).to(device)
-                L_eval_norm = (L_grid_phys / cfg.physics.L_scale).to(device)
-                n_c_hat_eval, _ = csd_net(
-                    t_eval_norm.repeat(cfg.physics.n_L_grid),
-                    L_eval_norm
-                )
-                n_c_eval = (n_c_hat_eval * cfg.physics.n_scale).cpu().numpy()
+            t_data_cpu = data["t"].cpu().numpy()
+            T_data_cpu = data["T"].cpu().numpy()
+            F_data_cpu = data["F"].cpu().numpy()
+            N_data_cpu = data["N"].cpu().numpy()
 
+            T_interp = interp1d(t_data_cpu, T_data_cpu, kind='linear', fill_value="extrapolate")
+            F_interp = interp1d(t_data_cpu, F_data_cpu, kind='linear', fill_value="extrapolate")
+            N_interp = interp1d(t_data_cpu, N_data_cpu, kind='linear', fill_value="extrapolate")
+
+            eval_times = torch.linspace(0, cfg.physics.total_time, 5).cpu().numpy()
+            
+            for t_eval in eval_times:
+                # Get T, F, N at this time
+                T_eval = T_interp(t_eval).item()
+                F_eval = F_interp(t_eval).item()
+                N_eval = N_interp(t_eval).item()
+                
+                # Create tensors repeated over L grid
+                t_tensor = torch.full((cfg.physics.n_L_grid,), t_eval, device=device, dtype=torch.float32)
+                T_tensor = torch.full((cfg.physics.n_L_grid,), T_eval, device=device, dtype=torch.float32)
+                F_tensor = torch.full((cfg.physics.n_L_grid,), F_eval, device=device, dtype=torch.float32)
+                N_tensor = torch.full((cfg.physics.n_L_grid,), N_eval, device=device, dtype=torch.float32)
+                
+                # Normalize
+                t_norm = (t_tensor / cfg.physics.t_scale)
+                L_norm = (L_grid_phys / cfg.physics.L_scale)
+                T_norm = (T_tensor / cfg.physics.T_scale)
+                F_norm = (F_tensor / cfg.physics.F_scale)
+                N_norm = (N_tensor / cfg.physics.N_scale)
+                
+                # Forward pass
+                n_c_hat_eval, _ = csd_net(t_norm, L_norm, T_norm, F_norm, N_norm)
+                n_c_eval = (n_c_hat_eval * cfg.physics.n_scale).cpu().numpy()
+                
                 if cfg.logging.use_wandb:
                     wandb.log({
                         f"CSD_cryst/t_{int(t_eval.item())}s": wandb.Histogram(n_c_eval),

@@ -194,6 +194,8 @@ def plot_csd_snapshots(results, save_dir, time_points=None):
     t = results["t"]
     L = results["L"] * 1e6  # convert to μm
     n_c = results["n_c"]
+    
+    print(f" n_c : {n_c} | ")
 
     plt.figure()
     for tp in time_points:
@@ -255,7 +257,7 @@ def plot_mass_balance(results, cfg, save_dir):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--ckpt", type=str, required=True, help="Path to model checkpoint (.pt)")
-    parser.add_argument("--config", type=str, default="configs/config.yaml", help="Path to config (for scales)")
+    parser.add_argument("--config", type=str, default="/Users/sujithsaisripadam/PBE_PINNs/configs/configs.yaml", help="Path to config (for scales)")
     parser.add_argument("--output_dir", type=str, default="plots/", help="Directory to save plots")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     args = parser.parse_args()
@@ -264,6 +266,7 @@ def main():
 
     # Load config (minimal: just need scales and physics)
     import yaml
+    print(args.config)
     with open(args.config, "r") as f:
         cfg_raw = yaml.safe_load(f)
 
@@ -302,8 +305,8 @@ def main():
     L_grid = ckpt.get("L_grid", None)
 
     # Reconstruct models
-    csd_net = PINN_CSD(hidden_dim=256, num_layers=4)  # must match training!
-    conc_net = PINN_CONC(hidden_dim=256, num_layers=4)
+    csd_net = PINN_CSD(hidden_dim=512, num_layers=5)  # must match training!
+    conc_net = PINN_CONC(hidden_dim=512, num_layers=5)
 
     csd_net.load_state_dict(ckpt["csd_state_dict"])
     conc_net.load_state_dict(ckpt["conc_state_dict"])

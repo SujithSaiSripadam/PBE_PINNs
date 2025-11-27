@@ -66,6 +66,10 @@ class PhysicsLossFullPBM_Nondim:
         self.L_scale = p.L_scale
         self.n_scale = p.n_scale
         self.c_scale = c_scale
+        
+        self.T_scale = p.T_scale
+        self.F_scale = p.F_scale
+        self.N_scale = p.N_scale
 
         # Precompute physical delta and B matrix
         self.delta_phys = gaussian_delta_on_grid(
@@ -94,12 +98,15 @@ class PhysicsLossFullPBM_Nondim:
         N_coll_phys = N_coll_phys.to(self.device).to(self.dtype)
 
         # Normalize inputs
+        T_hat = (T_coll_phys / self.T_scale).requires_grad_(True)
+        F_hat = (F_coll_phys / self.F_scale).requires_grad_(True)
+        N_hat = (N_coll_phys / self.N_scale).requires_grad_(True)
         t_hat = (t_coll_phys / self.t_scale).requires_grad_(True)
         L_hat = (L_coll_phys / self.L_scale).requires_grad_(True)
 
         # Forward pass
-        n_c_hat, n_wm_hat = csd_net(t_hat, L_hat)
-        c_c_hat, c_wm_hat = conc_net(t_hat)
+        n_c_hat, n_wm_hat = csd_net(t_hat, L_hat, T_hat, F_hat, N_hat)
+        c_c_hat, c_wm_hat = conc_net(t_hat, T_hat, F_hat, N_hat)
 
         # Reconstruct physical concentrations
         c_c_phys = c_c_hat * self.c_scale
@@ -196,9 +203,31 @@ class PhysicsLossFullPBM_Nondim:
         # --- Wet Mill PDE ---
         t_rep = uniq_t.view(-1, 1).repeat(1, self.nL).view(-1)
         L_rep = self.L_grid_phys.repeat(n_unique)
-        t_rep_norm = t_rep / self.t_scale
-        L_rep_norm = L_rep / self.L_scale
-        _, n_wm_rep_hat = csd_net(t_rep_norm, L_rep_norm)
+
+        # Interpolate T, F, N for uniq_t
+        T_uniq = torch.zeros(n_unique, device=self.device, dtype=self.dtype)
+        F_uniq = torch.zeros(n_unique, device=self.device, dtype=self.dtype)
+        N_uniq = torch.zeros(n_unique, device=self.device, dtype=self.dtype)
+        for k in range(n_unique):
+            mask = inv_idx == k
+            if mask.any():
+                T_uniq[k] = T_coll_phys[mask].mean()
+                F_uniq[k] = F_coll_phys[mask].mean()
+                N_uniq[k] = N_coll_phys[mask].mean()
+
+        T_rep = T_uniq.repeat_interleave(self.nL)
+        F_rep = F_uniq.repeat_interleave(self.nL)
+        N_rep = N_uniq.repeat_interleave(self.nL)
+
+        # Normalize
+        t_rep_norm = (t_rep / self.t_scale).requires_grad_(True)
+        L_rep_norm = (L_rep / self.L_scale).requires_grad_(True)
+        T_rep_norm = (T_rep / self.T_scale).requires_grad_(True)
+        F_rep_norm = (F_rep / self.F_scale).requires_grad_(True)
+        N_rep_norm = (N_rep / self.N_scale).requires_grad_(True)
+
+        # Forward
+        _, n_wm_rep_hat = csd_net(t_rep_norm, L_rep_norm, T_rep_norm, F_rep_norm, N_rep_norm)
         n_wm_matrix_phys = (n_wm_rep_hat * self.n_scale).view(n_unique, self.nL)
         
         # Clean up intermediate tensors to reduce memory
@@ -240,7 +269,7 @@ class PhysicsLossFullPBM_Nondim:
 
         # --- Wet Mill Mass Balance ---
         dc_wm_hat_dtau = torch.autograd.grad(
-            c_wm_hat, t_hat, grad_outputs=torch.ones_like(c_wm_hat), create_graph=True, retain_graph=False
+            c_wm_hat, t_hat, grad_outputs=torch.ones_like(c_wm_hat), create_graph=True, retain_graph=True
         )[0]
         RHS_dim_wm = - (F_coll_phys / self.Vwm) * (c_c_phys - c_wm_phys)
         mass_wm_hat = dc_wm_hat_dtau - (self.t_scale / self.c_scale) * RHS_dim_wm
