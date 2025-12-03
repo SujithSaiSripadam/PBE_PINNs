@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 import argparse
-from src.models import PINN_CSD, PINN_CONC
+from src.models import PINN_SHARED
 from matplotlib.colors import LogNorm
 import scipy
 from mpl_toolkits.mplot3d import Axes3D
@@ -39,7 +39,11 @@ def evaluate_models(csd_net, conc_net, L_grid_phys, t_eval, cfg, device):
     with torch.no_grad():
         # Concentration
         t_norm = (t_eval / cfg.physics.t_scale).to(device)
-        c_c_hat, c_wm_hat = conc_net(t_norm)
+        # No external T/F/N provided to this script; use reference zeros
+        T_dummy = torch.zeros_like(t_norm)
+        F_dummy = torch.zeros_like(t_norm)
+        N_dummy = torch.zeros_like(t_norm)
+        c_c_hat, c_wm_hat = conc_net(t_norm, T_dummy, F_dummy, N_dummy)
         c_c = (c_c_hat.cpu() * cfg.c_scale).numpy()
         c_wm = (c_wm_hat.cpu() * cfg.c_scale).numpy()
 
@@ -49,9 +53,13 @@ def evaluate_models(csd_net, conc_net, L_grid_phys, t_eval, cfg, device):
         L_flat = L_mesh.reshape(-1)
 
         t_norm_flat = (T_flat / cfg.physics.t_scale).to(device)
+        # Use dummy T/F/N for CSD evaluation as well
+        T_flat_dummy = torch.zeros_like(t_norm_flat)
+        F_flat_dummy = torch.zeros_like(t_norm_flat)
+        N_flat_dummy = torch.zeros_like(t_norm_flat)
         L_norm_flat = (L_flat / cfg.physics.L_scale).to(device)
 
-        n_c_hat_flat, _ = csd_net(t_norm_flat, L_norm_flat)
+        n_c_hat_flat, _ = csd_net(t_norm_flat, L_norm_flat, T_flat_dummy, F_flat_dummy, N_flat_dummy)
         n_c_flat = (n_c_hat_flat.cpu() * cfg.physics.n_scale).numpy()
 
         n_c_2d = n_c_flat.reshape(T_mesh.shape)
@@ -304,14 +312,25 @@ def main():
     ckpt = load_checkpoint(args.ckpt, device)
     L_grid = ckpt.get("L_grid", None)
 
-    # Reconstruct models
-    csd_net = PINN_CSD(hidden_dim=512, num_layers=5)  # must match training!
-    conc_net = PINN_CONC(hidden_dim=512, num_layers=5)
-
-    csd_net.load_state_dict(ckpt["csd_state_dict"])
-    conc_net.load_state_dict(ckpt["conc_state_dict"])
-    csd_net.to(device)
-    conc_net.to(device)
+    # Reconstruct shared model
+    from src.models import PINN_SHARED
+    shared = PINN_SHARED(hidden_dim=512, num_layers=5)
+    if "shared_state_dict" in ckpt:
+        shared.load_state_dict(ckpt["shared_state_dict"])
+    else:
+        if "csd_state_dict" in ckpt:
+            try:
+                shared.load_state_dict(ckpt["csd_state_dict"], strict=False)
+            except Exception:
+                pass
+        if "conc_state_dict" in ckpt:
+            try:
+                shared.load_state_dict(ckpt["conc_state_dict"], strict=False)
+            except Exception:
+                pass
+    shared.to(device)
+    csd_net = shared
+    conc_net = shared
 
     # Evaluation grids
     L_grid_phys, t_eval = create_evaluation_grids(cfg, device)

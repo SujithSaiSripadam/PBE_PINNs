@@ -24,14 +24,14 @@ plt.rcParams.update({
 # Import project modules
 # ---------------------------
 try:
-    from src.models import PINN_CSD, PINN_CONC
+    from src.models import PINN_SHARED
     from src.utils import load_data
     from src.physics.operators import supersaturation, nucleation_rate
 except ModuleNotFoundError:
     import sys
     import os
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-    from src.models import PINN_CSD, PINN_CONC
+    from src.models import PINN_SHARED
     from src.utils import load_data
     from src.physics.operators import supersaturation, nucleation_rate
 
@@ -173,12 +173,25 @@ def main():
 
     # Load model
     ckpt = load_checkpoint(args.ckpt, device)
-    csd_net = PINN_CSD(hidden_dim=512)
-    conc_net = PINN_CONC(hidden_dim=512)
-    csd_net.load_state_dict(ckpt["csd_state_dict"])
-    conc_net.load_state_dict(ckpt["conc_state_dict"])
-    csd_net.to(device)
-    conc_net.to(device)
+    shared = PINN_SHARED(hidden_dim=512)
+    # Loading: prefer 'shared_state_dict' key; otherwise attempt best-effort load
+    if "shared_state_dict" in ckpt:
+        shared.load_state_dict(ckpt["shared_state_dict"])
+    else:
+        # try loading legacy separate checkpoints non-strictly
+        if "csd_state_dict" in ckpt:
+            try:
+                shared.load_state_dict(ckpt["csd_state_dict"], strict=False)
+            except Exception:
+                pass
+        if "conc_state_dict" in ckpt:
+            try:
+                shared.load_state_dict(ckpt["conc_state_dict"], strict=False)
+            except Exception:
+                pass
+    shared.to(device)
+    csd_net = shared
+    conc_net = shared
 
     # Load data
     data = load_data(args.data_csv, nrows=None, device=device)

@@ -3,7 +3,7 @@ import numpy as np
 import os
 import hydra
 from omegaconf import DictConfig
-from src.models import PINN_CSD, PINN_CONC
+from src.models import PINN_SHARED
 from src.physics import PhysicsLossFullPBM_Nondim
 from src.utils import load_data
 from src.utils.grids import simpson_integrate_over_L
@@ -15,6 +15,7 @@ from omegaconf import OmegaConf
 import gc
 from scipy.interpolate import interp1d
 import sys
+import subprocess
 
 def set_seed(seed):
     torch.manual_seed(seed)
@@ -74,17 +75,15 @@ def main(cfg: DictConfig):
         drop_last=True
     )
 
-    # Models
-    csd_net = PINN_CSD(
+    # Single shared model with two branches
+    shared_net = PINN_SHARED(
         hidden_dim=cfg.model.hidden_dim,
         activation=cfg.model.activation,
         num_layers=cfg.model.num_layers
     ).to(device)
-    conc_net = PINN_CONC(
-        hidden_dim=cfg.model.hidden_dim,
-        activation=cfg.model.activation,
-        num_layers=cfg.model.num_layers
-    ).to(device)
+    # For backward compatibility with compute_loss API we pass the same object
+    csd_net = shared_net
+    conc_net = shared_net
     
     # Load checkpoint if provided
     start_epoch = 0
@@ -92,8 +91,20 @@ def main(cfg: DictConfig):
         if os.path.exists(checkpoint_path):
             print(f"\nLoading checkpoint from: {checkpoint_path}")
             ckpt = torch.load(checkpoint_path, map_location=device)
-            csd_net.load_state_dict(ckpt["csd_state_dict"])
-            conc_net.load_state_dict(ckpt["conc_state_dict"])
+            # Prefer shared_state_dict, otherwise try to load legacy keys non-strictly
+            if "shared_state_dict" in ckpt:
+                shared_net.load_state_dict(ckpt["shared_state_dict"])
+            else:
+                if "csd_state_dict" in ckpt:
+                    try:
+                        shared_net.load_state_dict(ckpt["csd_state_dict"], strict=False)
+                    except Exception:
+                        pass
+                if "conc_state_dict" in ckpt:
+                    try:
+                        shared_net.load_state_dict(ckpt["conc_state_dict"], strict=False)
+                    except Exception:
+                        pass
             start_epoch = ckpt.get("epoch", 0) + 1
             print(f"Checkpoint loaded. Resuming from epoch {start_epoch}")
         else:
@@ -112,7 +123,8 @@ def main(cfg: DictConfig):
     )
 
     # Optimizer
-    params = list(csd_net.parameters()) + list(conc_net.parameters())
+    # Use unique parameter list from the shared network
+    params = list(shared_net.parameters())
     optimizer = torch.optim.AdamW(
         params,
         lr=cfg.training.lr,
@@ -239,8 +251,7 @@ def main(cfg: DictConfig):
             ckpt_path = f"pinn_pbm_checkpoint_epoch_{epoch}.pt"
             torch.save({
                 "epoch": epoch,
-                "csd_state_dict": csd_net.state_dict(),
-                "conc_state_dict": conc_net.state_dict(),
+                "shared_state_dict": shared_net.state_dict(),
                 "optimizer_state_dict": optimizer.state_dict(),
                 "loss": avg_epoch_loss,
                 "L_grid": L_grid_phys.cpu(),
@@ -248,6 +259,30 @@ def main(cfg: DictConfig):
 
             if cfg.logging.use_wandb:
                 wandb.save(ckpt_path)
+
+            # --- Run latest_inference.py periodically (every eval_interval epochs) ---
+            try:
+                eval_interval = int(getattr(cfg.training, "eval_interval", 9))
+            except Exception:
+                eval_interval = 9
+
+            if (epoch + 1) % eval_interval == 0:
+                out_dir = os.path.join("plots", f"inference_epoch_{epoch+1}")
+                os.makedirs(out_dir, exist_ok=True)
+                latest_script = os.path.join(os.path.dirname(__file__), "latest_inference.py")
+                cmd = [
+                    sys.executable,
+                    latest_script,
+                    f"--ckpt={ckpt_path}",
+                    f"--data_csv={cfg.data.csv_path}",
+                    f"--output_dir={out_dir}",
+                    f"--device={device.type}"
+                ]
+                print(f"Running latest_inference: {' '.join(cmd)}")
+                try:
+                    subprocess.run(cmd, check=False)
+                except Exception as e:
+                    print(f"Warning: latest_inference failed: {e}")
 
             # --- End-of-Epoch Evaluation: Plot CSD at representative times ---
             csd_net.eval()
@@ -385,8 +420,7 @@ def main(cfg: DictConfig):
             torch.save({
                 "epoch": cfg.training.n_epochs + lbfgs_epoch,
                 "lbfgs_step": lbfgs_epoch,
-                "csd_state_dict": csd_net.state_dict(),
-                "conc_state_dict": conc_net.state_dict(),
+                "shared_state_dict": shared_net.state_dict(),
                 "optimizer_state_dict": lbfgs_optimizer.state_dict(),
                 "loss": avg_lbfgs_epoch_loss,
                 "L_grid": L_grid_phys.cpu(),
@@ -395,6 +429,29 @@ def main(cfg: DictConfig):
             if cfg.logging.use_wandb:
                 wandb.save(ckpt_path_lbfgs)
         
+            try:
+                eval_interval = int(getattr(cfg.training, "eval_interval", 9))
+            except Exception:
+                eval_interval = 9
+
+            if (lbfgs_epoch + 1) % eval_interval == 0:
+                out_dir = os.path.join("plots", f"inference_epoch_lbfgs_{lbfgs_epoch+1}")
+                os.makedirs(out_dir, exist_ok=True)
+                latest_script = os.path.join(os.path.dirname(__file__), "latest_inference.py")
+                cmd = [
+                    sys.executable,
+                    latest_script,
+                    f"--ckpt={ckpt_path_lbfgs}",
+                    f"--data_csv={cfg.data.csv_path}",
+                    f"--output_dir={out_dir}",
+                    f"--device={device.type}"
+                ]
+                print(f"Running latest_inference: {' '.join(cmd)}")
+                try:
+                    subprocess.run(cmd, check=False)
+                except Exception as e:
+                    print(f"Warning: latest_inference failed: {e}")
+                    
         print("L-BFGS Fine-tuning Complete")
         print(f"Final L-BFGS Loss: {lbfgs_loss_history[-1]:.3e}")
 
