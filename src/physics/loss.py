@@ -84,9 +84,17 @@ class PhysicsLossFullPBM_Nondim:
         self.delta_hat = (self.delta_phys * self.L_scale).to(self.dtype)
         self.B_hat = (self.B_phys * self.L_scale).to(self.dtype)
 
-    def compute_loss(self, csd_net, conc_net, t_coll_phys, L_coll_phys, T_coll_phys, F_coll_phys, N_coll_phys):
+    def compute_loss(self, shared_net, t_coll_phys, L_coll_phys, T_coll_phys, F_coll_phys, N_coll_phys):
         """
         Compute total physics loss for a batch of collocation points.
+        
+        Parameters
+        ----------
+        shared_net : PINN_SHARED
+            Single shared network with two branches (CSD and concentration).
+            Automatically routes based on number of input arguments:
+            - 5 args (t, L, T, F, N) -> CSD branch (n_c_hat, n_wm_hat)
+            - 4 args (t, T, F, N) -> Concentration branch (c_c_hat, c_wm_hat)
 
         All inputs are in physical units.
         Networks accept normalized inputs and output dimensionless fields.
@@ -104,9 +112,11 @@ class PhysicsLossFullPBM_Nondim:
         t_hat = (t_coll_phys / self.t_scale).requires_grad_(True)
         L_hat = (L_coll_phys / self.L_scale).requires_grad_(True)
 
-        # Forward pass
-        n_c_hat, n_wm_hat = csd_net(t_hat, L_hat, T_hat, F_hat, N_hat)
-        c_c_hat, c_wm_hat = conc_net(t_hat, T_hat, F_hat, N_hat)
+        # Forward pass - single shared network with automatic branch routing
+        # 5 args (t, L, T, F, N) routes to CSD branch
+        n_c_hat, n_wm_hat = shared_net(t_hat, L_hat, T_hat, F_hat, N_hat)
+        # 4 args (t, T, F, N) routes to concentration branch
+        c_c_hat, c_wm_hat = shared_net(t_hat, T_hat, F_hat, N_hat)
 
         # Reconstruct physical concentrations
         c_c_phys = c_c_hat * self.c_scale
@@ -226,8 +236,8 @@ class PhysicsLossFullPBM_Nondim:
         F_rep_norm = (F_rep / self.F_scale).requires_grad_(True)
         N_rep_norm = (N_rep / self.N_scale).requires_grad_(True)
 
-        # Forward
-        _, n_wm_rep_hat = csd_net(t_rep_norm, L_rep_norm, T_rep_norm, F_rep_norm, N_rep_norm)
+        # Forward - use shared_net with 5 args for CSD branch
+        _, n_wm_rep_hat = shared_net(t_rep_norm, L_rep_norm, T_rep_norm, F_rep_norm, N_rep_norm)
         n_wm_matrix_phys = (n_wm_rep_hat * self.n_scale).view(n_unique, self.nL)
         
         # Clean up intermediate tensors to reduce memory

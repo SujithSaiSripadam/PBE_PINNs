@@ -33,9 +33,8 @@ def create_evaluation_grids(cfg, device):
     return L_grid_phys, t_eval
 
 
-def evaluate_models(csd_net, conc_net, L_grid_phys, t_eval, cfg, device):
-    csd_net.eval()
-    conc_net.eval()
+def evaluate_models(shared_net, L_grid_phys, t_eval, cfg, device):
+    shared_net.eval()
     with torch.no_grad():
         # Concentration
         t_norm = (t_eval / cfg.physics.t_scale).to(device)
@@ -43,7 +42,7 @@ def evaluate_models(csd_net, conc_net, L_grid_phys, t_eval, cfg, device):
         T_dummy = torch.zeros_like(t_norm)
         F_dummy = torch.zeros_like(t_norm)
         N_dummy = torch.zeros_like(t_norm)
-        c_c_hat, c_wm_hat = conc_net(t_norm, T_dummy, F_dummy, N_dummy)
+        c_c_hat, c_wm_hat = shared_net(t_norm, T_dummy, F_dummy, N_dummy)
         c_c = (c_c_hat.cpu() * cfg.c_scale).numpy()
         c_wm = (c_wm_hat.cpu() * cfg.c_scale).numpy()
 
@@ -59,7 +58,7 @@ def evaluate_models(csd_net, conc_net, L_grid_phys, t_eval, cfg, device):
         N_flat_dummy = torch.zeros_like(t_norm_flat)
         L_norm_flat = (L_flat / cfg.physics.L_scale).to(device)
 
-        n_c_hat_flat, _ = csd_net(t_norm_flat, L_norm_flat, T_flat_dummy, F_flat_dummy, N_flat_dummy)
+        n_c_hat_flat, _ = shared_net(t_norm_flat, L_norm_flat, T_flat_dummy, F_flat_dummy, N_flat_dummy)
         n_c_flat = (n_c_hat_flat.cpu() * cfg.physics.n_scale).numpy()
 
         n_c_2d = n_c_flat.reshape(T_mesh.shape)
@@ -329,14 +328,12 @@ def main():
             except Exception:
                 pass
     shared.to(device)
-    csd_net = shared
-    conc_net = shared
 
     # Evaluation grids
     L_grid_phys, t_eval = create_evaluation_grids(cfg, device)
 
     # Forward evaluation
-    results = evaluate_models(csd_net, conc_net, L_grid_phys, t_eval, cfg, device)
+    results = evaluate_models(shared, L_grid_phys, t_eval, cfg, device)
 
     # Generate plots
     plot_concentration_vs_time(results, args.output_dir)

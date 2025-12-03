@@ -9,7 +9,7 @@ model:
 
 # --- Training ---
 training:
-  n_epochs: 100
+  n_epochs: 2
   lr: 5e-5
   weight_decay: 1e-6
   batch_size: 1024
@@ -21,7 +21,7 @@ training:
   
   # L-BFGS fine-tuning settings
   use_lbfgs: true       # Set to true to enable L-BFGS fine-tuning after AdamW
-  lbfgs_epochs: 100      # Number of L-BFGS iterations (line search steps)
+  lbfgs_epochs: 2     # Number of L-BFGS iterations (line search steps)
   lbfgs_max_iter: 1     # Max iterations per line search step
 
 # --- Physics ---

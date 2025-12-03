@@ -81,9 +81,6 @@ def main(cfg: DictConfig):
         activation=cfg.model.activation,
         num_layers=cfg.model.num_layers
     ).to(device)
-    # For backward compatibility with compute_loss API we pass the same object
-    csd_net = shared_net
-    conc_net = shared_net
     
     # Load checkpoint if provided
     start_epoch = 0
@@ -147,7 +144,7 @@ def main(cfg: DictConfig):
             name= hydra.core.hydra_config.HydraConfig.get().job.name,
             settings=wandb.Settings(show_warnings = False)
         )
-        wandb.watch((csd_net, conc_net), log="all", log_freq=cfg.logging.log_freq)
+        wandb.watch(shared_net, log="all", log_freq=cfg.logging.log_freq)
 
     # ---------------------------
     # Training Loop - AdamW Stage
@@ -161,8 +158,7 @@ def main(cfg: DictConfig):
         print("="*60)
         
         for epoch in range(start_epoch, cfg.training.n_epochs):
-            csd_net.train()
-            conc_net.train()
+            shared_net.train()
             epoch_loss = 0.0
             num_batches = 0
 
@@ -171,7 +167,7 @@ def main(cfg: DictConfig):
                 t_b, L_b, T_b, F_b, N_b = [x.to(device) for x in batch]
 
                 optimizer.zero_grad()
-                loss_phys, loss_dict, preds = phys.compute_loss(csd_net, conc_net, t_b, L_b, T_b, F_b, N_b)
+                loss_phys, loss_dict, preds = phys.compute_loss(shared_net, t_b, L_b, T_b, F_b, N_b)
                 loss_value = loss_phys.item()
                 loss_phys.backward()
 
@@ -213,7 +209,7 @@ def main(cfg: DictConfig):
                 """
                 with torch.no_grad():
                     t_all_norm = data["t"] / cfg.physics.t_scale
-                    c_pred_all, _ = conc_net(t_all_norm)
+                    c_pred_all, _ = shared_net(t_all_norm)
                     c_pred_all = (c_pred_all * c_scale).cpu().numpy()
                     c_true_all = data["c"].cpu().numpy()
 
@@ -285,8 +281,7 @@ def main(cfg: DictConfig):
                     print(f"Warning: latest_inference failed: {e}")
 
             # --- End-of-Epoch Evaluation: Plot CSD at representative times ---
-            csd_net.eval()
-            conc_net.eval()
+            shared_net.eval()
             with torch.no_grad():
                 t_data_cpu = data["t"].cpu().numpy()
                 T_data_cpu = data["T"].cpu().numpy()
@@ -319,7 +314,7 @@ def main(cfg: DictConfig):
                     N_norm = (N_tensor / cfg.physics.N_scale)
                     
                     # Forward pass
-                    n_c_hat_eval, _ = csd_net(t_norm, L_norm, T_norm, F_norm, N_norm)
+                    n_c_hat_eval, _ = shared_net(t_norm, L_norm, T_norm, F_norm, N_norm)
                     n_c_eval = (n_c_hat_eval * cfg.physics.n_scale).cpu().numpy()
                     
                     if cfg.logging.use_wandb:
@@ -330,10 +325,9 @@ def main(cfg: DictConfig):
                     else:
                         writer.add_histogram(f"CSD_cryst/t_{int(t_eval.item())}s", n_c_eval, global_step)
 
-            csd_net.train()
-            conc_net.train()
+            shared_net.train()
         
-        print("\nAdamW Training Complete!")
+        print("\\nAdamW Training Complete!")
         print(f"Final Loss: {avg_epoch_loss:.3e}")
     
     else:
@@ -349,8 +343,7 @@ def main(cfg: DictConfig):
         print("Starting L-BFGS Fine-tuning Stage")
         print("="*60)
         
-        csd_net.train()
-        conc_net.train()
+        shared_net.train()
         
         # Create L-BFGS optimizer
         lbfgs_optimizer = torch.optim.LBFGS(
@@ -374,7 +367,7 @@ def main(cfg: DictConfig):
                 
                 def closure():
                     lbfgs_optimizer.zero_grad()
-                    loss_phys, loss_dict, preds = phys.compute_loss(csd_net, conc_net, t_b, L_b, T_b, F_b, N_b)
+                    loss_phys, loss_dict, preds = phys.compute_loss(shared_net, t_b, L_b, T_b, F_b, N_b)
                     loss_phys.backward()
                     return loss_phys
                 

@@ -190,8 +190,6 @@ def main():
             except Exception:
                 pass
     shared.to(device)
-    csd_net = shared
-    conc_net = shared
 
     # Load data
     data = load_data(args.data_csv, nrows=None, device=device)
@@ -208,7 +206,7 @@ def main():
         T_norm = (T_true / cfg.physics.T_scale).to(device)
         F_norm = (F_true / cfg.physics.F_scale).to(device)
         N_norm = (N_true / cfg.physics.N_scale).to(device)
-        c_c_hat, c_wm_hat = conc_net(t_norm, T_norm, F_norm, N_norm)
+        c_c_hat, c_wm_hat = shared(t_norm, T_norm, F_norm, N_norm)
         c_pred = (c_c_hat * cfg.c_scale).cpu()
         cwm_pred = (c_wm_hat * cfg.c_scale).cpu()
 
@@ -279,11 +277,11 @@ def main():
         N_norm_vec = N_vec / cfg.physics.N_scale
 
         with torch.no_grad():
-            n_hat, n_wm_hat = csd_net(t_norm_vec, L_norm_vec, T_norm_vec, F_norm_vec, N_norm_vec)
+            n_hat, n_wm_hat = shared(t_norm_vec, L_norm_vec, T_norm_vec, F_norm_vec, N_norm_vec)
             n_c_2d[i, :] = (n_hat * cfg.physics.n_scale).cpu().numpy()
             n_wm_2d[i, :] = (n_wm_hat * cfg.physics.n_scale).cpu().numpy()
 
-            # evaluate concentration (use single-point conc_net) for nucleation diagnostics
+            # evaluate concentration (use single-point shared) for nucleation diagnostics
             t_single = torch.tensor([t_val], device=device, dtype=torch.float32)
             T_single = torch.tensor([T_val], device=device, dtype=torch.float32)
             F_single = torch.tensor([F_val], device=device, dtype=torch.float32)
@@ -292,7 +290,7 @@ def main():
             T_norm_single = T_single / cfg.physics.T_scale
             F_norm_single = F_single / cfg.physics.F_scale
             N_norm_single = N_single / cfg.physics.N_scale
-            c_hat_single, _ = conc_net(t_norm_single, T_norm_single, F_norm_single, N_norm_single)
+            c_hat_single, _ = shared(t_norm_single, T_norm_single, F_norm_single, N_norm_single)
             c_phys_single = (c_hat_single * cfg.c_scale).cpu().numpy()[0]
             c_c_eval[i] = c_phys_single
 
