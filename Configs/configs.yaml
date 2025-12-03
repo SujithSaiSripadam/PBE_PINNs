@@ -28,7 +28,7 @@ physics:
   g: 1.0
   kd: 0.563
   d: 1.0
-  Ln: 1.0e-6
+  Ln: 2.0e-6
 
   # solubility coefficients
   a0: 5.48e-3
