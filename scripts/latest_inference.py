@@ -302,12 +302,16 @@ def main():
     N_total_wm = float(cfg.physics.Vwm) * np.sum(n_wm_2d * dL, axis=1)
     
 
-    # Save total crystals to CSV: columns = t, N_total
+    # Reduce n matrices to per-time summaries by averaging across L
+    mean_n_c = np.mean(n_c_2d, axis=1)   # shape (n_t,) — average number density across size bins
+    mean_n_wm = np.mean(n_wm_2d, axis=1) # shape (n_t,)
+
+    # Save compact CSV: t, mean_n_c, mean_n_wm, N_crys, N_wm
     np.savetxt(
         os.path.join(args.output_dir, "total_crystals.csv"),
-        np.column_stack((t_np,n_c_2d, n_wm_2d,N_total_crys,N_total_wm)),
+        np.column_stack((t_np, mean_n_c, mean_n_wm, N_total_crys, N_total_wm)),
         delimiter=",",
-        header="t,n(Crys),n(WM)N_crys,N_wm",
+        header="t,mean_n_c,mean_n_wm,N_crys,N_wm",
         comments=""
     )
 
