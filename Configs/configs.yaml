@@ -4,13 +4,13 @@ defaults:
 # --- Model ---
 model:
   hidden_dim: 1024
-  num_layers: 5
+  num_layers: 10
   activation: "SiLU"
 
 # --- Training ---
 training:
-  n_epochs: 2
-  lr: 5e-5
+  n_epochs: 50
+  lr: 1e-6
   weight_decay: 1e-6
   batch_size: 1024
   grad_clip: 5.0
@@ -21,8 +21,23 @@ training:
   
   # L-BFGS fine-tuning settings
   use_lbfgs: true       # Set to true to enable L-BFGS fine-tuning after AdamW
-  lbfgs_epochs: 2     # Number of L-BFGS iterations (line search steps)
+  lbfgs_epochs: 10     # Number of L-BFGS iterations (line search steps)
   lbfgs_max_iter: 1     # Max iterations per line search step
+
+  # Loss weighting & adaptive sampling
+  lambda_phys: 1.0          # Initial physics loss weight
+  lambda_data: 1.0          # Data loss weight (usually 1.0)
+  adaptive_weights: true    # Enable dynamic loss rebalancing
+  weight_rebalance_freq: 1 # Rebalance weights every N steps
+  
+  # Residual-based adaptive sampling
+  adaptive_sampling: true   # Enable high-residual point sampling
+  sample_rebalance_freq: 1 # Resample collocation points every N steps
+  sampling_high_residual_ratio: 0.7 # Fraction of high-residual points (0-1)
+  
+  # Loss function options
+  loss_fn: "huber"            # "mse", "mae", or "huber"
+  huber_delta: 0.01         # Delta for Huber loss
 
 # --- Physics ---
 physics:
@@ -53,9 +68,9 @@ physics:
   kf: 80.0
 
   L_max: 1.2e-3          # 1200 μm
-  n_L_grid: 201          # must be odd
+  n_L_grid: 51          # must be odd
   total_time: 1200.0     # seconds
-  n_t_collocation: 400
+  n_t_collocation: 100
   t_scale: 1200.0
   L_scale: 1.2e-3
   c_ref_temp: 30.0       # for c_scale

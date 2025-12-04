@@ -7,6 +7,7 @@ from src.models import PINN_SHARED
 from src.physics import PhysicsLossFullPBM_Nondim
 from src.utils import load_data
 from src.utils.grids import simpson_integrate_over_L
+from src.utils.adaptive_sampling import AdaptiveLossWeighter, AdaptiveSampler, create_loss_fn
 from torch.utils.data import TensorDataset, DataLoader
 from torch.utils.tensorboard import SummaryWriter
 import wandb
@@ -152,6 +153,28 @@ def main(cfg: DictConfig):
     global_step = 0
     writer = SummaryWriter(log_dir="runs/" + hydra.core.hydra_config.HydraConfig.get().job.name)
 
+    # Initialize adaptive loss weighting
+    loss_weighter = AdaptiveLossWeighter(
+        initial_lambda_phys=cfg.training.lambda_phys,
+        initial_lambda_data=cfg.training.lambda_data,
+    )
+    loss_fn = create_loss_fn(cfg.training.loss_fn, cfg.training.huber_delta)
+
+    # Initialize adaptive sampler
+    adaptive_sampler = AdaptiveSampler(
+        n_candidates=len(t_coll),
+        high_residual_ratio=cfg.training.sampling_high_residual_ratio,
+        device=str(device),
+        dtype=torch.float32,
+    ) if cfg.training.adaptive_sampling else None
+    
+    # Store original collocation data for resampling
+    t_coll_orig = t_coll.clone()
+    L_coll_orig = L_coll.clone()
+    T_all_orig = T_all.clone()
+    F_all_orig = F_all.clone()
+    N_all_orig = N_all.clone()
+
     if cfg.training.use_adamw:
         print("\n" + "="*60)
         print("Starting AdamW Training Stage")
@@ -168,8 +191,18 @@ def main(cfg: DictConfig):
 
                 optimizer.zero_grad()
                 loss_phys, loss_dict, preds = phys.compute_loss(shared_net, t_b, L_b, T_b, F_b, N_b)
-                loss_value = loss_phys.item()
-                loss_phys.backward()
+                
+                # Apply adaptive loss weighting
+                if cfg.training.adaptive_weights and global_step % cfg.training.weight_rebalance_freq == 0:
+                    lambda_phys, lambda_data = loss_weighter.update(
+                        loss_phys.detach().item(),
+                        1.0,  # data loss placeholder (not used in physics-only training)
+                        global_step
+                    )
+                
+                weighted_loss = loss_weighter.lambda_phys * loss_phys
+                loss_value = weighted_loss.item()
+                weighted_loss.backward()
 
                 # Gradient clipping
                 torch.nn.utils.clip_grad_norm_(params, cfg.training.grad_clip)
@@ -192,6 +225,8 @@ def main(cfg: DictConfig):
                     "Loss_Physics/Mass_cryst": loss_dict["mass_cryst_loss"],
                     "Loss_Physics/Mass_wm": loss_dict["mass_wm_loss"],
                     "Loss_Physics/BC": loss_dict["bc_nLmax_loss"],
+                    "Loss_Physics/raw": loss_phys.detach().item(),
+                    "Weights/lambda_phys": loss_weighter.lambda_phys,
                     "step": global_step,
                     "epoch": epoch,
                 }
@@ -240,6 +275,50 @@ def main(cfg: DictConfig):
             current_lr = scheduler.get_last_lr()[0]
             print(f"Learning Rate: {current_lr:.3e}")
             
+            # --- Adaptive Sampling at end of epoch ---
+            if cfg.training.adaptive_sampling and (epoch + 1) % cfg.training.sample_rebalance_freq == 0:
+                print(f"\n[Adaptive Sampling] Resampling collocation points (epoch {epoch+1})...")
+                # compute_residuals will handle training mode internally
+                residuals = phys.compute_residuals(
+                    shared_net,
+                    t_coll_orig.to(device),
+                    L_coll_orig.to(device),
+                    T_all_orig.to(device),
+                    F_all_orig.to(device),
+                    N_all_orig.to(device),
+                )
+                
+                # Resample based on residuals
+                t_coll, L_coll, T_all, F_all, N_all = adaptive_sampler.adaptive_resample(
+                    t_coll_orig.to(device),
+                    L_coll_orig.to(device),
+                    T_all_orig.to(device),
+                    F_all_orig.to(device),
+                    N_all_orig.to(device),
+                    residuals,
+                    batch_size=cfg.training.batch_size,
+                )
+                
+                # Recreate data loader with resampled points
+                colloc_dataset = TensorDataset(t_coll, L_coll, T_all, F_all, N_all)
+                colloc_loader = DataLoader(
+                    colloc_dataset,
+                    batch_size=cfg.training.batch_size,
+                    shuffle=True,
+                    drop_last=True
+                )
+                
+                residual_mean = residuals.mean().item()
+                residual_max = residuals.max().item()
+                print(f"[Adaptive Sampling] Mean residual: {residual_mean:.3e}, Max residual: {residual_max:.3e}")
+                
+                if cfg.logging.use_wandb:
+                    wandb.log({
+                        "Sampling/residual_mean": residual_mean,
+                        "Sampling/residual_max": residual_max,
+                        "Sampling/epoch": epoch,
+                    })
+            
             # Cleanup memory at end of epoch
             cleanup_memory()
 
@@ -258,9 +337,9 @@ def main(cfg: DictConfig):
 
             # --- Run latest_inference.py periodically (every eval_interval epochs) ---
             try:
-                eval_interval = int(getattr(cfg.training, "eval_interval", 9))
+                eval_interval = int(getattr(cfg.training, "eval_interval", 1000))
             except Exception:
-                eval_interval = 9
+                eval_interval = 1000
 
             if (epoch + 1) % eval_interval == 0:
                 out_dir = os.path.join("plots", f"inference_epoch_{epoch+1}")
@@ -368,8 +447,14 @@ def main(cfg: DictConfig):
                 def closure():
                     lbfgs_optimizer.zero_grad()
                     loss_phys, loss_dict, preds = phys.compute_loss(shared_net, t_b, L_b, T_b, F_b, N_b)
-                    loss_phys.backward()
-                    return loss_phys
+                    
+                    # Apply adaptive loss weighting
+                    if cfg.training.adaptive_weights and lbfgs_global_step % cfg.training.weight_rebalance_freq == 0:
+                        loss_weighter.update(loss_phys.detach().item(), 1.0, lbfgs_global_step)
+                    
+                    weighted_loss = loss_weighter.lambda_phys * loss_phys
+                    weighted_loss.backward()
+                    return weighted_loss
                 
                 loss_value = lbfgs_optimizer.step(closure)
                 
@@ -388,6 +473,7 @@ def main(cfg: DictConfig):
                     "Loss_Physics/Mass_cryst": loss_dict["mass_cryst_loss"],
                     "Loss_Physics/Mass_wm": loss_dict["mass_wm_loss"],
                     "Loss_Physics/BC": loss_dict["bc_nLmax_loss"],
+                    "Weights/lambda_phys_lbfgs": loss_weighter.lambda_phys,
                     "lbfgs_step": lbfgs_global_step,
                     "lbfgs_epoch": lbfgs_epoch,
                 }
@@ -423,9 +509,9 @@ def main(cfg: DictConfig):
                 wandb.save(ckpt_path_lbfgs)
         
             try:
-                eval_interval = int(getattr(cfg.training, "eval_interval", 9))
+                eval_interval = int(getattr(cfg.training, "eval_interval", 1000))
             except Exception:
-                eval_interval = 9
+                eval_interval = 1000
 
             if (lbfgs_epoch + 1) % eval_interval == 0:
                 out_dir = os.path.join("plots", f"inference_epoch_lbfgs_{lbfgs_epoch+1}")

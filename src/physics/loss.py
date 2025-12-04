@@ -329,3 +329,103 @@ class PhysicsLossFullPBM_Nondim:
         }
 
         return loss, metrics, preds
+
+    def compute_residuals(self, shared_net, t_coll_phys, L_coll_phys, T_coll_phys, F_coll_phys, N_coll_phys):
+        """
+        Compute per-point residual magnitudes for adaptive sampling.
+        
+        Returns residuals averaged across all physics constraints for each collocation point.
+        Used to identify high-error regions and enable adaptive sampling.
+        
+        Parameters
+        ----------
+        shared_net : PINN_SHARED
+            Single shared network with two branches
+        All inputs in physical units
+        
+        Returns
+        -------
+        residuals : torch.Tensor
+            Per-point residual magnitude, shape (n_points,)
+        """
+        # Save training state and temporarily enable gradients
+        was_training = shared_net.training
+        shared_net.train()
+        
+        t_coll_phys = t_coll_phys.to(self.device).to(self.dtype)
+        L_coll_phys = L_coll_phys.to(self.device).to(self.dtype)
+        T_coll_phys = T_coll_phys.to(self.device).to(self.dtype)
+        F_coll_phys = F_coll_phys.to(self.device).to(self.dtype)
+        N_coll_phys = N_coll_phys.to(self.device).to(self.dtype)
+
+        # Normalize inputs
+        T_hat = (T_coll_phys / self.T_scale).requires_grad_(True)
+        F_hat = (F_coll_phys / self.F_scale).requires_grad_(True)
+        N_hat = (N_coll_phys / self.N_scale).requires_grad_(True)
+        t_hat = (t_coll_phys / self.t_scale).requires_grad_(True)
+        L_hat = (L_coll_phys / self.L_scale).requires_grad_(True)
+
+        # Forward pass (with gradients)
+        n_c_hat, n_wm_hat = shared_net(t_hat, L_hat, T_hat, F_hat, N_hat)
+        c_c_hat, c_wm_hat = shared_net(t_hat, T_hat, F_hat, N_hat)
+
+        # Reconstruct physical concentrations
+        c_c_phys = c_c_hat * self.c_scale
+        c_wm_phys = c_wm_hat * self.c_scale
+
+        # Compute physics terms (simplified for residual estimation)
+        sigma_c = supersaturation(c_c_phys, T_coll_phys, self.a0, self.a1, self.a2)
+        B_nuc_dim = nucleation_rate(
+            sigma_c, c_c_phys, T_coll_phys, self.kb, self.b, self.a0, self.a1, self.a2
+        )
+        G_dim = growth_rate(
+            sigma_c, c_c_phys, T_coll_phys, self.kg, self.g, self.kd, self.d, self.a0, self.a1, self.a2
+        )
+        
+        B_nuc_dim = torch.nan_to_num(B_nuc_dim, nan=0.0, posinf=0.0, neginf=0.0)
+        G_dim = torch.nan_to_num(G_dim, nan=0.0, posinf=0.0, neginf=0.0)
+
+        # Compute residuals for main PDE terms (simplified - doesn't compute full PDE)
+        # For adaptive sampling, we mainly care about CSD dynamics
+        ones = torch.ones_like(n_c_hat)
+        dn_hat_dtau = torch.autograd.grad(n_c_hat, t_hat, grad_outputs=ones, create_graph=False, allow_unused=True, retain_graph=True)[0]
+        
+        G_hat = G_dim * (self.t_scale / self.L_scale)
+        Gn_hat = G_hat * n_c_hat
+        dGnhat_dlambda = torch.autograd.grad(Gn_hat, L_hat, grad_outputs=ones, create_graph=False, allow_unused=True, retain_graph=True)[0]
+        
+        # PDE residual for crystallizer
+        with torch.no_grad():
+            diff = torch.abs(L_coll_phys.view(-1, 1) - self.L_grid_phys.view(1, -1))
+            nearest_idx = torch.argmin(diff, dim=1)
+        delta_hat_at_coll = self.delta_hat[nearest_idx]
+        
+        Fhat_cryst = (F_coll_phys / self.Vc) * self.t_scale
+        B_nuc_hat = B_nuc_dim * (self.t_scale / self.n_scale)
+        
+        # Guard against None gradients
+        if dn_hat_dtau is None:
+            dn_hat_dtau = torch.zeros_like(n_c_hat)
+        if dGnhat_dlambda is None:
+            dGnhat_dlambda = torch.zeros_like(n_c_hat)
+        
+        pde_cryst_residual = torch.abs(
+            dn_hat_dtau
+            + dGnhat_dlambda
+            - B_nuc_hat * delta_hat_at_coll
+            - Fhat_cryst * (n_wm_hat - n_c_hat)
+        )
+        
+        # Wet-mill PDE residual (simpler - just time derivative)
+        dn_wm_hat_dtau = torch.autograd.grad(n_wm_hat, t_hat, grad_outputs=ones, create_graph=False, allow_unused=True, retain_graph=False)[0]
+        if dn_wm_hat_dtau is None:
+            dn_wm_hat_dtau = torch.zeros_like(n_wm_hat)
+        pde_wm_residual = torch.abs(dn_wm_hat_dtau)
+        
+        # Combine residuals: average across PDE terms
+        combined_residuals = (pde_cryst_residual + pde_wm_residual) / 2.0
+        
+        # Restore training state
+        shared_net.train(was_training)
+        
+        return combined_residuals
